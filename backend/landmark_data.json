@@ -1,0 +1,28 @@
+{
+  "pashupatinath_temple": {
+    "name": "Pashupatinath Temple",
+    "description": "A sacred Hindu temple complex dedicated to Lord Shiva, situated on the banks of the Bagmati River.",
+    "lat": 27.7106,
+    "lon": 85.3487,
+    "folder": "pashupatinath",
+    "images": [
+      "image.png"
+    ]
+  },
+  "boudhanath_stupa": {
+    "name": "Boudhanath Stupa",
+    "description": "One of the largest spherical stupas in Nepal, a UNESCO World Heritage site and major Buddhist pilgrimage site.",
+    "lat": 27.7215,
+    "lon": 85.3620,
+    "folder": "boudhanath",
+    "images": []
+  },
+  "swayambhunath": {
+    "name": "Swayambhunath (Monkey Temple)",
+    "description": "An ancient religious complex atop a hill in the Kathmandu Valley, known for its iconic stupa and views of the city.",
+    "lat": 27.7149,
+    "lon": 85.2903,
+    "folder": "swayambhunath",
+    "images": []
+  }
+}

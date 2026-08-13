@@ -1,1 +1,4 @@
-aawaz/
+backend/data/*
+!backend/data/*.json
+!backend/data/*.md
+
