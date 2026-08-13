@@ -1,0 +1,4 @@
+/frontend/   @agent-1
+/backend/    @agent-2
+/contracts/  @agent-1 @agent-2
+/*.md        @agent-1 @agent-2
