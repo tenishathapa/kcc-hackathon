@@ -1,0 +1,356 @@
+openapi: 3.1.0
+info:
+  title: LandmarkAR API
+  version: 1.0.0
+  description: >-
+    Shared API contract for the LandmarkAR mobile augmented-reality app.
+
+    The Expo app captures a camera frame, reads GPS, and submits them to an
+    async background job. The Python backend processes the job (location + image
+    recognition) and returns the recognized place with a title, description and
+    useful details. The app polls the job until it completes.
+
+    This document is the single source of truth both teams build against. The
+    frontend generates a typed client from it; the backend implements it (e.g.
+    with FastAPI) and validates its generated schema against this file.
+    Breaking changes MUST bump the major version.
+  license:
+    name: MIT
+    identifier: MIT
+
+# Explicitly unauthenticated for the MVP. When authentication is added, define an
+# apiKey/oauth2 security scheme under `components.securitySchemes`, require it at root
+# level, and remove this empty `security` array.
+security:
+  - {}
+
+servers:
+  - url: https://api.landmarkar.dev
+    description: Production (replace per environment)
+  - url: http://127.0.0.1:8000
+    description: Local development (Python backend)
+
+tags:
+  - name: Recognition
+    description: Async place recognition background jobs
+  - name: System
+    description: Operational endpoints
+
+paths:
+  /v1/health:
+    get:
+      tags:
+        - System
+      summary: Health check
+      description: Connectivity / version check for the frontend.
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - version
+                  - timestamp
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - ok
+                  version:
+                    type: string
+                    description: Backend application version, e.g. "1.0.0"
+                  timestamp:
+                    type: string
+                    format: date-time
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/jobs:
+    post:
+      tags:
+        - Recognition
+      summary: Submit a place for asynchronous recognition
+      operationId: createPlaceJob
+      description: >-
+        Upload one camera frame (JPEG/PNG) with the device lat/long. The backend
+        creates a background job, processes it with location + image
+        recognition, and returns the recognized place.
+
+        Returns a job immediately (202). Poll `GET /v1/jobs/{jobId}` every
+        1-2s (exponential backoff, cap at 10s) until `status` is `succeeded` or
+        `failed`. When `succeeded`, `result` contains the place title,
+        description and details.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/CreateJobRequest"
+      responses:
+        "202":
+          description: Job created and queued for processing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecognitionJob"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/jobs/{jobId}:
+    get:
+      tags:
+        - Recognition
+      summary: Get job status and result
+      operationId: getPlaceJob
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          description: UUID of the recognition job.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >-
+            Current job state. `result` is populated once `status` is
+            `succeeded`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecognitionJob"
+              examples:
+                succeeded:
+                  $ref: "#/components/examples/JobSucceededExample"
+                failed:
+                  $ref: "#/components/examples/JobFailedExample"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  schemas:
+    CreateJobRequest:
+      type: object
+      description: >-
+        Multipart form payload. `image` is the raw binary frame; all other
+        fields are plain text parts.
+      required:
+        - image
+        - latitude
+        - longitude
+      properties:
+        image:
+          type: string
+          format: binary
+          description: Camera frame. JPEG or PNG. Max 8 MB.
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          description: WGS84 latitude of the device.
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          description: WGS84 longitude of the device.
+        headingDegrees:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 360
+          description: >-
+            Optional device facing direction (compass heading) in degrees,
+            0 = north, clockwise. Used to prioritize places in front of the
+            user.
+
+    Place:
+      type: object
+      description: Recognized place returned by a successful job.
+      required:
+        - id
+        - title
+        - description
+      properties:
+        id:
+          type: string
+          example: pl_paris_eiffel_tower
+        title:
+          type: string
+          example: Eiffel Tower
+        description:
+          type: string
+          example: >-
+            Iconic 330 m iron lattice tower built for the 1889 World's Fair.
+            Now the most visited paid monument in the world.
+        category:
+          type: string
+          description: Free-form category, e.g. "Monument".
+          example: Monument
+        address:
+          type: string
+          example: Champ de Mars, 75007 Paris, France
+        openingHours:
+          type: string
+          example: Daily 09:30-23:00
+        imageUrl:
+          type: string
+          format: uri
+          description: Representative photo of the place.
+        sourceUrl:
+          type: string
+          format: uri
+          description: Link to source material (e.g. Wikipedia).
+        distanceMeters:
+          type: number
+          format: double
+          minimum: 0
+          description: Approximate distance from the submitted location.
+
+    RecognitionJob:
+      type: object
+      required:
+        - jobId
+        - status
+        - createdAt
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - queued
+            - processing
+            - succeeded
+            - failed
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        result:
+          $ref: "#/components/schemas/Place"
+          description: Present and complete once `status` is `succeeded`.
+        error:
+          $ref: "#/components/schemas/Error"
+          description: Present once `status` is `failed`.
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code.
+          example: NO_PLACE_FOUND
+        message:
+          type: string
+          description: Human-readable explanation.
+        requestId:
+          type: string
+          format: uuid
+          description: Correlation id to reference when reporting the problem.
+
+  examples:
+    JobSucceededExample:
+      summary: Job finished and recognized a place
+      value:
+        jobId: 8f6d2f11-9b92-4f0e-9a7e-3a1c8f0e5b11
+        status: succeeded
+        createdAt: "2026-08-13T09:30:00Z"
+        updatedAt: "2026-08-13T09:30:06Z"
+        result:
+          id: pl_paris_eiffel_tower
+          title: Eiffel Tower
+          description: >-
+            Iconic 330 m iron lattice tower built for the 1889 World's Fair.
+            Now the most visited paid monument in the world.
+          category: Monument
+          address: Champ de Mars, 75007 Paris, France
+          openingHours: Daily 09:30-23:00
+          imageUrl: https://cdn.landmarkar.dev/pl_paris_eiffel_tower.jpg
+          sourceUrl: https://en.wikipedia.org/wiki/Eiffel_Tower
+          distanceMeters: 42
+
+    JobFailedExample:
+      summary: Job finished but could not recognize a place
+      value:
+        jobId: 4c71a0aa-8d2b-4c5f-9e10-abcdef123456
+        status: failed
+        createdAt: "2026-08-13T09:31:12Z"
+        updatedAt: "2026-08-13T09:31:18Z"
+        error:
+          code: NO_PLACE_FOUND
+          message: No matching place found for the submitted image and location.
+
+  responses:
+    InvalidRequest:
+      description: Request is malformed, or required form fields are missing/out of range.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PayloadTooLarge:
+      description: Image exceeds the 8 MB limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    UnsupportedMediaType:
+      description: Content type is not image/jpeg or image/png.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: Too many requests; retry after honoring the Retry-After header.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InternalError:
+      description: Unexpected server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServiceUnavailable:
+      description: Recognition model or datastore unavailable; safe to retry.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
